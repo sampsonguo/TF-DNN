@@ -39,7 +39,7 @@ parser.add_argument('--classifier_mode', default='wide_and_deep', type=str,
 parser.add_argument('--export_mode', default='raw', type=str,
                     help='raw or parsing')
 parser.add_argument('--mode', default='train_and_eval', type=str,
-                    help='train_and_eval or export_model')
+                    help='train_and_eval or export_model or load_model_and_predict')
 
 def main(argv):
     args = parser.parse_args(argv[1:])
@@ -109,7 +109,42 @@ def main(argv):
                                                     args.batch_size))
 
         print('\nTest set accuracy: {accuracy:0.3f}\n'.format(**eval_result))
-    
+ 
+    elif args.mode == "load_model_and_predict":
+         
+        classifier = tf.estimator.LinearClassifier(
+            feature_columns = wide_feature_columns,
+            model_dir = args.model_dir,
+            n_classes = 2,
+            weight_column = None,
+            label_vocabulary = None,
+            optimizer = 'Ftrl',
+            config = None,
+            partitioner = None,
+            warm_start_from = None,
+            loss_reduction = tf.losses.Reduction.SUM,
+            sparse_combiner = 'sum')
+        
+        # Generate predictions from the model
+        expected = ['0', '0', '0', '1']
+        predict_x = {
+            'hash_imei': [5, 4, 0, 8],
+            'app_id': [1629097, 2243498, 2225747, 57050],
+            'as_gs': [0, 0, 0, 1]
+        }
+
+        predictions = classifier.predict(
+            input_fn=lambda:game_data.eval_input_fn(predict_x,
+                                                    labels=None,
+                                                    batch_size=args.batch_size))
+
+        template = ('\npCTR is ({:.9f}), label is "{}"')
+
+        for pred_dict, expec in zip(predictions, expected):
+            probability = pred_dict['probabilities'][1]
+
+            print(template.format(probability, expec))
+
     elif args.mode == "export_model":
 
         features_dict = {}
@@ -135,32 +170,7 @@ def main(argv):
             as_text = False,
             checkpoint_path = None)
 
-
-    """
-    # Generate predictions from the model
-    expected = ['Setosa', 'Versicolor', 'Virginica']
-    predict_x = {
-        'SepalLength': [5.1, 5.9, 6.9],
-        'SepalWidth': [3.3, 3.0, 3.1],
-        'PetalLength': [1.7, 4.2, 5.4],
-        'PetalWidth': [0.5, 1.5, 2.1],
-    }
-
-    predictions = classifier.predict(
-        input_fn=lambda:iris_data.eval_input_fn(predict_x,
-                                                labels=None,
-                                                batch_size=args.batch_size))
-
-    template = ('\nPrediction is "{}" ({:.1f}%), expected "{}"')
-
-    for pred_dict, expec in zip(predictions, expected):
-        class_id = pred_dict['class_ids'][0]
-        probability = pred_dict['probabilities'][class_id]
-
-        print(template.format(iris_data.SPECIES[class_id],
-                              100 * probability, expec))
-    """
-
 if __name__ == '__main__':
     tf.logging.set_verbosity(tf.logging.INFO)
     tf.app.run(main)
+
