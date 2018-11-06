@@ -30,6 +30,16 @@ parser.add_argument('--hash_bucket_size', default=100000, type=int,
                     help='hash bucket size for categorical column with hash bucket')
 parser.add_argument('--hidden_units', default=[64, 16], type=list,
                     help='hidden units for dnn classifier')
+parser.add_argument('--model_dir', default='./model', type=str,
+                    help='model_dir for tensorflow')
+parser.add_argument('--serving_model_dir', default='./serving_model', type=str,
+                    help='model dir for tensorflow serving')
+parser.add_argument('--classifier_mode', default='wide_and_deep', type=str,
+                    help='dnn or wide or wide_and_deep')
+parser.add_argument('--export_mode', default='raw', type=str,
+                    help='raw or parsing')
+parser.add_argument('--mode', default='train_and_eval', type=str,
+                    help='train_and_eval or export_model')
 
 def main(argv):
     args = parser.parse_args(argv[1:])
@@ -39,6 +49,7 @@ def main(argv):
 
     # Feature columns describe how to use the input.
     my_feature_columns = []
+    wide_feature_columns = []
     for key in train_x.keys():
         #my_feature_columns.append(tf.feature_column.numeric_column(key=key))
         game_category_hashed_feature = tf.feature_column.categorical_column_with_hash_bucket(
@@ -57,28 +68,73 @@ def main(argv):
             max_norm = None,
             trainable = True)
         my_feature_columns.append(game_embedding_feature)
+        wide_feature_columns.append(game_category_hashed_feature)
 
     # Build 2 hidden layer DNN with 10, 10 units respectively.
-    classifier = tf.estimator.DNNClassifier(
-        feature_columns=my_feature_columns,
-        # Two hidden layers of 10 nodes each.
-        hidden_units=args.hidden_units,
-        model_dir='./game_model',
-        # The model must choose between 3 classes.
-        n_classes=2)
+    if args.classifier_mode == "wide":
+        classifier = tf.estimator.LinearClassifier(
+            feature_columns = wide_feature_columns,
+            model_dir = args.model_dir,
+            n_classes = 2,
+            weight_column = None,
+            label_vocabulary = None,
+            optimizer = 'Ftrl',
+            config = None,
+            partitioner = None,
+            warm_start_from = None,
+            loss_reduction = tf.losses.Reduction.SUM,
+            sparse_combiner = 'sum')
+        pass
+    elif args.classifier_mode == "deep":
+        classifier = tf.estimator.DNNClassifier(
+            feature_columns=my_feature_columns,
+            # Two hidden layers of 10 nodes each.
+            hidden_units=args.hidden_units,
+            model_dir=args.model_dir,
+            # The model must choose between 3 classes.
+            n_classes=2)
+    else:
+        pass
 
-    # Train the Model.
-    classifier.train(
-        input_fn=lambda:game_data.train_input_fn(train_x, train_y,
-                                                 args.batch_size),
-        steps=args.train_steps)
+    if args.mode == "train_and_eval":
+        # Train the Model.
+        classifier.train(
+            input_fn=lambda:game_data.train_input_fn(train_x, train_y,
+                                                     args.batch_size),
+            steps=args.train_steps)
 
-    # Evaluate the model.
-    eval_result = classifier.evaluate(
-        input_fn=lambda:game_data.eval_input_fn(test_x, test_y,
-                                                args.batch_size))
+        # Evaluate the model.
+        eval_result = classifier.evaluate(
+            input_fn=lambda:game_data.eval_input_fn(test_x, test_y,
+                                                    args.batch_size))
 
-    print('\nTest set accuracy: {accuracy:0.3f}\n'.format(**eval_result))
+        print('\nTest set accuracy: {accuracy:0.3f}\n'.format(**eval_result))
+    
+    elif args.mode == "export_model":
+
+        features_dict = {}
+        # Export the model
+        # Parsing Mode
+        if args.export_mode == "parsing":
+            serving_input_receiver = tf.estimator.export.build_parsing_serving_input_receiver_fn(
+                feature_spec = None,
+                default_batch_size = None)
+        # Raw Mode
+        else:
+            features_dict["hash_imei"] = tf.placeholder(dtype = tf.int64, shape = (None, 100), name = 'hash_imei')
+            features_dict["app_id"] = tf.placeholder(dtype = tf.int64, shape = (None, 1000000), name = 'app_id')
+            features_dict["as_gs"] = tf.placeholder(dtype = tf.int64, shape = (None, 100), name = 'as_gs')
+            serving_input_receiver = tf.estimator.export.build_raw_serving_input_receiver_fn(
+                features = features_dict,
+                default_batch_size = None)
+
+        classifier.export_savedmodel(
+            export_dir_base = args.serving_model_dir,
+            serving_input_receiver_fn = lambda: serving_input_receiver(),
+            assets_extra = None,
+            as_text = False,
+            checkpoint_path = None)
+
 
     """
     # Generate predictions from the model
